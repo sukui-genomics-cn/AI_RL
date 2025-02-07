@@ -82,6 +82,13 @@ class Actor():
     '''第二步 编写根据状态选择动作的函数'''
 
     def choose_action(self, s):
+        """
+        在PPO中, 动作的对数概率在策略更新时非常重要.
+        :param s: 当前状态
+        :return:
+            :action: 从策略网络生成的动作. 以mean和std为参数的正太分布中采样得到.
+            :action_logprob: 所选动作在当前策略下的对数概率.
+        """
         inputstate = torch.FloatTensor(s)
         mean, std = self.old_pi(inputstate)
         dist = torch.distributions.Normal(mean, std)  # 创建正态分布的类
@@ -146,11 +153,19 @@ class Critic():
     '''第七步  编写actor-critic的critic部分的learn函数，td-error的计算代码（V现实减去V估计就是td-error）'''
 
     def learn(self, bs, br):
+        """
+        实现critic部分的学习过程, 用于更新价值函数V(s)的网络参数, 并计算TD-Error, 使网络估计的价值函数V(s)更接近环境实际产生的回报Gt
+        Gt - V(s)时强化学习中用于衡量当前策略表现的重要指标.
+        目标: 优化价值函数, 使Critic更准确地估计每个状态值.
+        :param bs: 智能体在环境中采样得到的一组状态
+        :param br: 从环境中计算得到的折扣累计奖励
+        :return: 更新后的Critic网络参数, 以及TD-Error (供Actor部分使用)
+        """
         bs = torch.FloatTensor(bs)
-        reality_v = torch.FloatTensor(br)
+        reality_v = torch.FloatTensor(br)  # 真实的奖励
         for _ in range(C_UPDATE_STEPS):
             v = self.get_v(bs)
-            td_e = self.lossfunc(reality_v, v)
+            td_e = self.lossfunc(reality_v, v)  # 计算TD-error, 衡量当前策略表现的重要指标
             self.optimizer.zero_grad()
             td_e.backward()
             nn.utils.clip_grad_norm_(self.critic_v.parameters(), 0.5)
@@ -182,6 +197,7 @@ if Switch == 0:
             reward = (reward - reward.mean()) / (reward.std() + 1e-5)
             # PPO 更新
             if (timestep + 1) % BATCH == 0 or timestep == EP_LEN - 1:
+                # 开始计算折扣累计奖励Gt: 用于衡量从某个状态st开始, 智能体能期望获得的未来累计奖励.
                 v_observation_ = critic.get_v(observation_)
                 discounted_r = []
                 for reward in buffer_r[::-1]:
