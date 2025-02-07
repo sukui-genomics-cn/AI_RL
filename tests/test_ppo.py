@@ -1,6 +1,7 @@
 import logging
 
 import gymnasium as gym
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -32,8 +33,7 @@ class PPO:
         self.policy_old.load_state_dict(self.policy.state_dict())
 
     def select_action(self, state):
-        print("State shape:", np.shape(state))  # 添加此行以检查 state 的形状
-        state = torch.FloatTensor(state)
+        state = torch.FloatTensor(state).unsqueeze(0)  # 在第0维增加一个维度
         action_probs, _ = self.policy_old(state)
         dist = Categorical(action_probs)
         action = dist.sample()
@@ -91,10 +91,10 @@ def train_ppo(env_name='CartPole-v1', max_episodes=1000, max_timesteps=300):
     memory = {'states': [], 'actions': [], 'rewards': [], 'log_probs': []}
 
     for episode in range(max_episodes):
-        state = env.reset()
+        state, _ = env.reset()
         for t in range(max_timesteps):
             action, log_prob = ppo.select_action(state)
-            next_state, reward, done, _ = env.step(action)
+            next_state, reward, done, _, _ = env.step(action)
 
             # 存储数据到memory
             memory['states'].append(state)
