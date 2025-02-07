@@ -40,9 +40,9 @@ class ActorNet(nn.Module):
         super(ActorNet, self).__init__()
         self.in_to_y1 = nn.Linear(inp, 100)
         self.in_to_y1.weight.data.normal_(0, 0.1)
-        self.out = nn.Linear(100, outp)
+        self.out = nn.Linear(100, outp)  # mean of the distribution
         self.out.weight.data.normal_(0, 0.1)
-        self.std_out = nn.Linear(100, outp)
+        self.std_out = nn.Linear(100, outp)  # std of the distribution
         self.std_out.weight.data.normal_(0, 0.1)
 
     '''生成均值与标准差，PPO必须这样做，一定要生成分布（所以需要mean与std），不然后续学习策略里的公式写不了，DDPG是可以不用生成概率分布的'''
@@ -50,7 +50,7 @@ class ActorNet(nn.Module):
     def forward(self, inputstate):
         inputstate = self.in_to_y1(inputstate)
         inputstate = F.relu(inputstate)
-        mean = max_action * torch.tanh(self.out(inputstate))  # 输出概率分布的均值mean
+        mean = max_action * torch.tanh(self.out(inputstate))  # 输出概率分布的均值mean, tanh: [-1,1]
         std = F.softplus(self.std_out(inputstate))  # softplus激活函数的值域>0
         return mean, std
 
@@ -75,8 +75,8 @@ class CriticNet(nn.Module):
 
 class Actor():
     def __init__(self):
-        self.old_pi, self.new_pi = ActorNet(state_number, action_number), ActorNet(state_number,
-                                                                                   action_number)  # 这只是均值mean
+        self.old_pi, self.new_pi = ActorNet(state_number, action_number), \
+                                   ActorNet(state_number, action_number)  # 这只是均值mean
         self.optimizer = torch.optim.Adam(self.new_pi.parameters(), lr=A_LR, eps=1e-5)
 
     '''第二步 编写根据状态选择动作的函数'''
@@ -84,7 +84,7 @@ class Actor():
     def choose_action(self, s):
         inputstate = torch.FloatTensor(s)
         mean, std = self.old_pi(inputstate)
-        dist = torch.distributions.Normal(mean, std)
+        dist = torch.distributions.Normal(mean, std)  # 创建正态分布的类
         action = dist.sample()
         action = torch.clamp(action, min_action, max_action)
         action_logprob = dist.log_prob(action)
@@ -98,6 +98,14 @@ class Actor():
     '''第六步 编写actor网络的学习函数，采用PPO2，即OpenAI推出的clip形式公式'''
 
     def learn(self, bs, ba, adv, bap):
+        """
+        通过计算新旧策略对同一批次数据的概率比率, 结合优势函数, clipping策略, 实现稳定且有效的策略优化.
+        :param bs: batch state
+        :param ba: batch actions
+        :param adv: advantages, 优势函数, 表示特定状态下, 采取特定动作相对于平均水平的优劣程度
+        :param bap: batch action log probabilities, 策略更新时, 用于计算旧策略的概率比率, 限制新旧策略之间的变化幅度.
+        :return:
+        """
         bs = torch.FloatTensor(bs)
         ba = torch.FloatTensor(ba)
         adv = torch.FloatTensor(adv)
@@ -163,6 +171,7 @@ if Switch == 0:
             if RENDER:
                 env.render()
             action, action_logprob = actor.choose_action(observation)
+
             observation_, reward, done, truncated, info = env.step(action)
             buffer_s.append(observation)
             buffer_a.append(action)
