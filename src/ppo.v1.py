@@ -105,7 +105,7 @@ class Actor():
     '''第六步 编写actor网络的学习函数，采用PPO2，即OpenAI推出的clip形式公式'''
 
     def learn(self, bs, ba, adv, bap):
-        """
+        """ PPO中用于更新Actor(策略网络)参数的核心部分, 通过最大化策略的期望收益.
         通过计算新旧策略对同一批次数据的概率比率, 结合优势函数, clipping策略, 实现稳定且有效的策略优化.
         :param bs: batch state
         :param ba: batch actions
@@ -117,12 +117,12 @@ class Actor():
         ba = torch.FloatTensor(ba)
         adv = torch.FloatTensor(adv)
         bap = torch.FloatTensor(bap)
-        for _ in range(A_UPDATE_STEPS):
-            mean, std = self.new_pi(bs)
+        for _ in range(A_UPDATE_STEPS):  # 执行多次策略更新
+            mean, std = self.new_pi(bs)  # 通过新的策略网络new_pi, 基于输入状态的bs计算动作部分的mean和std
             dist_new = torch.distributions.Normal(mean, std)
-            action_new_logprob = dist_new.log_prob(ba)
-            ratio = torch.exp(action_new_logprob - bap.detach())
-            surr1 = ratio * adv
+            action_new_logprob = dist_new.log_prob(ba)  # 用于计算新旧策略的概率比率, 评估策略的变化幅度
+            ratio = torch.exp(action_new_logprob - bap.detach())  # 用对数概率的差值计算, 避免数值下溢
+            surr1 = ratio * adv  # adv: 衡量动作a相对于平均水平的好坏程度
             surr2 = torch.clamp(ratio, 1 - METHOD['epsilon'], 1 + METHOD['epsilon']) * adv
             loss = -torch.min(surr1, surr2)
             loss = loss.mean()
@@ -207,7 +207,7 @@ if Switch == 0:
                 bs, ba, br, bap = np.vstack(buffer_s), np.vstack(buffer_a), np.array(discounted_r), np.vstack(
                     buffer_a_logp)
                 buffer_s, buffer_a, buffer_r, buffer_a_logp = [], [], [], []
-                advantage = critic.learn(bs, br)  # critic部分更新
+                advantage = critic.learn(bs, br)  # critic部分更新, 让critic模型根据state, 拟合真实的reward.
                 actor.learn(bs, ba, advantage, bap)  # actor部分更新
                 actor.update_oldpi()  # pi-new的参数赋给pi-old
                 # critic.learn(bs,br)
@@ -246,3 +246,22 @@ else:
             state = new_state
         print("Score：", total_rewards)
     env.close()
+
+"""
+PPO和环境交互学习流程
+该方法没有用到memory, 每次更新ppo用到的数据时连续的状态, 动作和奖励值, 它采用两个actor网络(actor_old, actor_new), 实现off-policy
+
+for ep in EP_MAX回合次数:
+    当前状态s = env.reset()
+    初始化buffer_s, buffer_a, buffer_r, buffer_a_logp
+    for t in EP_LEN时间步:
+        执行动作a, 动作a的概率值 = ppo_actor选择动作choose_action(s)
+        agent执行动作a与环境交互, 得到新状态s_, 奖励r, 是否结束done, 截断truncated, 信息info = env.step(a)
+        buffer_s.append(s), buffer_a.append(a), buffer_r.append(r), buffer_a_logp.append(动作a的概率值)
+        s = s_
+        
+        更新ppo的条件: buffer收集了batch_size长度的transition或者episode规定长度结束:
+            下一个状态价值v(s_) = ppo_critic.get_v(s_)
+            计算累计折扣奖励值discounted_r, 得到每个状态对应的累计折扣奖励
+            ppo.update(buffer_state, buffer_action, discounted_reward, buffer_action_logp)
+"""
