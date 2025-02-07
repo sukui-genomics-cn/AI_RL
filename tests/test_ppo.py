@@ -92,9 +92,10 @@ def train_ppo(env_name='CartPole-v1', max_episodes=1000, max_timesteps=300):
 
     for episode in range(max_episodes):
         state, _ = env.reset()
+        total_reward = 0
         for t in range(max_timesteps):
             action, log_prob = ppo.select_action(state)
-            next_state, reward, done, _, _ = env.step(action)
+            next_state, reward, done, truncated, info = env.step(action)
 
             # 存储数据到memory
             memory['states'].append(state)
@@ -103,6 +104,7 @@ def train_ppo(env_name='CartPole-v1', max_episodes=1000, max_timesteps=300):
             memory['log_probs'].append(log_prob.item())
 
             state = next_state
+            total_reward += reward
 
             if done:
                 break
@@ -115,9 +117,10 @@ def train_ppo(env_name='CartPole-v1', max_episodes=1000, max_timesteps=300):
 
         # 打印进度
         if (episode + 1) % 10 == 0:
-            print(f'Episode {episode + 1}/{max_episodes} completed')
+            logging.info(f'Episode {episode + 1}/{max_episodes}, Total Reward: {total_reward:.2f}')
 
     env.close()
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
     train_ppo()
