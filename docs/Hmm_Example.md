@@ -116,3 +116,4 @@ trans_p 为转移概率; 而 emit_p 为放射概率。 为了简化代码，我�
 
 ## Refs
 - [维特比算法](https://zh.wikipedia.org/wiki/%E7%BB%B4%E7%89%B9%E6%AF%94%E7%AE%97%E6%B3%95)
+- 
