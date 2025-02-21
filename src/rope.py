@@ -10,7 +10,7 @@ class RotaryPositionEmbedding(nn.Module):
         self.max_seq_len = max_seq_len
 
         # 预计算频率参数 theta_i
-        theta = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
+        theta = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim)) # 对于hidden维度计算theta, 每一个维度, 变化的频率有差异.
         self.register_buffer('theta', theta)
 
     def forward(self, x):
@@ -111,3 +111,4 @@ if __name__ == "__main__":
     output = model(x)
     print("输入形状:", x.shape)
     print("输出形状:", output.shape)
+zhe
