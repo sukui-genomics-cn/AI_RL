@@ -37,7 +37,7 @@ dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
 
 # 定义模型、优化器
 input_size = 64
-hidden_size = 32  # 隐藏层大小
+hidden_size = 8  # 隐藏层大小
 sparsity_param = 0.05  # 稀疏性参数
 beta = 1  # 稀疏性损失权重
 sae = SparseAutoencoder(input_size=input_size, hidden_size=hidden_size, sparsity_param=sparsity_param, beta=beta)
@@ -53,6 +53,7 @@ for epoch in range(num_epochs):
         loss = nn.functional.binary_cross_entropy(reconstructed_data, original_data)  # 重构损失
         # 计算稀疏性损失
         p_h = torch.mean(encoded_data, dim=0)
+        # sparsity_loss = 0.01 * torch.mean(torch.abs(encoded_data))  # L1稀疏惩罚
         loss += sae.sparsity_loss(p_h)  # 加入稀疏性损失
         loss.backward()
         optimizer.step()
