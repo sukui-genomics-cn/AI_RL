@@ -42,3 +42,51 @@ dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
 print(tensor) # 每个进程都会输出 tensor(6.0), 因为0+1+2+3=6
 
 ```
+
+## Modules
+
+**NCCL**
+NCCL是Nvidia专门为多GPU之间提供通讯的通讯库, 或者说是一个多GPU卡通讯的框架, 提供了包括AllReduce, Broadcast, Reduce, AllGather, ReduceScatter等集合通讯API, NCCL屏蔽了底层复杂的细节, 向上提供API提供训练框架调用, 向下连接机内间的GPU以完成模型参数的高效传输.
+
+![img](https://developer.qcloudimg.com/http-save/yehe-9497423/b4197640cb6e5e9027e1ee76cbccc63a.png)
+
+**Megatron-LM**
+Megatron-LM是一个基于PyTorch的分布式训练框架, 用来训练基于Transformer的大模型. Megatron-LM综合应用了数据并行, 张量并行, 流水线并行(pipeline parallelism). 很多大模型的训练过程都采用它, 如bloom, opt等.
+
+**troch.distributed (dist)**
+
+为运行在一台或多台机器上的多个计算节点之间的Pytorch提供多进程并行性通信的原语. 其能轻松地并行化在跨进程和机器集群的计算.
+
+Group是所有进程的子集.
+
+Backend进程通信库, PyTorch支持NCCL, GLOO, MPI.
+
+world_size 在进程组中的进程数
+
+Rank分配给分布式进程组中每个进程的唯一标识符, 它们始终是从0到world_size的连续整数.
+
+**troch.distributed算子介绍**
+
+- gather: 把其他进程的数据收集到目标进程, 返回一个列表
+
+![img](https://developer.qcloudimg.com/http-save/yehe-9497423/5b08254b2fa7839371eb131e9b1d4247.png)
+
+- all_gather: 是将所有进程的数据收集起来, 再分发给他们
+
+![img](https://developer.qcloudimg.com/http-save/yehe-9497423/433c4d4fa7dda49c38af9d2c01d0c061.png)
+
+- reduce: 把所有节点的值加起来, 再分发给所有节点
+
+![img](https://developer.qcloudimg.com/http-save/yehe-9497423/805032468fbcf6b2f944f0c180d34f54.png)
+
+- broadcast: 把某个节点的数据分发给所有节点
+
+![img](https://developer.qcloudimg.com/http-save/yehe-9497423/6eb890bf9406e2a685e504ec6c60a555.png)
+
+- scatter: 把某个进程上的列表数据逐个分发给其他所有进程
+
+![img](https://developer.qcloudimg.com/http-save/yehe-9497423/57db08d59cd22d1de8dc5d95149a30c3.png)
+
+
+
+使用 `tf.autograph.experimental.do_not_convert` 装饰器允许在损失函数中设置断点.
