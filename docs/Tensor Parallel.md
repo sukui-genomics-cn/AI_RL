@@ -87,6 +87,62 @@ Rank分配给分布式进程组中每个进程的唯一标识符, 它们始终�
 
 ![img](https://developer.qcloudimg.com/http-save/yehe-9497423/57db08d59cd22d1de8dc5d95149a30c3.png)
 
+## LLM 中支持并行的算子介绍
+
+**Embedding Layer**
+其包含两个输入, 一个是 word embedding(v,h), 存放的是所有词的向量, v表示所有词表大小. 词表往往很大, 并行主要考虑word embedding的拆分. 
+
+另一个是position embedding, 主要用于从word embedding中索引处对应的embedding. 如输入数据为[0,212,7,9], 数据中的每一个元素代表词序号. word embedding 切分方式按照列进行切割.
+
+![img](https://developer.qcloudimg.com/http-save/yehe-9497423/228a2e521020d5f3e71856edec2434a7.png)
+
+把word embedding按照列才分, 每张卡都有完整的position embedding, 根据position embedding值索引到对应位置的word embedding 得到Y1, Y2, 再将Y1和Y2 all_gather起来就是完整的Y.
 
 
-使用 `tf.autograph.experimental.do_not_convert` 装饰器允许在损失函数中设置断点.
+
+**Attention Layer**
+LLaMa2模型中的attention层再核心公式前各加了一层Linear.
+
+| ![img](https://developer.qcloudimg.com/http-save/yehe-9497423/11009bb1b070e343d80164975af28a1e.png) | <img src="https://developer.qcloudimg.com/http-save/yehe-9497423/d029d6aac82ef045a2176439ff2f4ab9.jpg" alt="img" style="zoom:80%;" /> |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+
+对于上面attention层的并行策略是:
+
+1. 对第一个Linear按列进行拆分, X输入分别和W1, W2计算, 获得两个输出
+2. 第一步的两个输出, 各自进行attention公式计算, 计算完也有两个输出
+3. 第二个linear按行拆分, 得到两个输出
+4. 两个输出进行all_reduce相加, 得到最后的output. 
+
+**Llama2 FeedForward Layer**
+
+Feed Forward的计算公式如下
+$$
+down(up(X) * SiLU(gate(X)))
+$$
+up, down与gate是三个维度相同的Linear层, 图计算过程.
+
+| Noram                                                        | Parallel                                                     |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| ![img](https://developer.qcloudimg.com/http-save/yehe-9497423/9e97849093319b304eb1334e8c9f9478.png) | <img src="https://developer.qcloudimg.com/http-save/yehe-9497423/fb2b542a28a97938e556eaf505fbd8e6.jpg" alt="img" style="zoom:80%;" /> |
+
+并行策略如下：
+
+1、up层Linear按列拆分，X输入与之计算之后，会再每张卡上有一个输出。
+
+2、gate层Linear按列拆分，X输入与之计算之后，同样的每张卡有一个输出，
+
+3、每张卡的输出各自进行SiLU和矩阵乘计算
+
+4、down层Linear按行拆分，分别与每张卡的输出计算，产生两个输出
+
+5、两个输出进行all_reduce相加，得到最终的输出
+
+**单独的Linear Layer**
+
+Linear主要做矩阵乘法, 把一个s*h的输入和h * h'的weight做矩阵曾发, 得到一个s * h' 的输出.
+
+| Normal                                                       | Parallel                                                     |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| ![img](https://developer.qcloudimg.com/http-save/yehe-9497423/922ee664220fa9b9c380c9d60bda3100.png) | ![img](https://developer.qcloudimg.com/http-save/yehe-9497423/f76ad2fcb589f9ac82d0156419204102.png) |
+
+Y1和Y2使用all_gather算子汇总结果得到最终的Y
