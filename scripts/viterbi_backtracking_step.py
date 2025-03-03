@@ -1,6 +1,8 @@
 import torch
 
-def viterbi_backtracking_step(prev_states, gamma_state, transition_matrix_transposed,output_type=torch.int64, non_homogeneous_mask=None):
+
+def viterbi_backtracking_step(prev_states, gamma_state, transition_matrix_transposed, output_type=torch.int64,
+                              non_homogeneous_mask=None):
     """
     Computes a Viterbi backtracking step in parallel for all models and batch elements.
     :param prev_states: Previous decoded states. Shape: (num_model, b, 1)
@@ -30,6 +32,7 @@ def viterbi_backtracking_step(prev_states, gamma_state, transition_matrix_transp
     next_states = next_states.unsqueeze(-1)
     return next_states
 
+
 if __name__ == '__main__':
     # Dummu data
     num_models, batch_size, q = 2, 3, 4
@@ -40,7 +43,7 @@ if __name__ == '__main__':
     non_homogeneous_mask = torch.ones(num_models, batch_size, q, q)  # Example mask
 
     result = viterbi_backtracking_step(
-        prev_states, gamma_state, transition_matrix_transposed,non_homogeneous_mask=None
+        prev_states, gamma_state, transition_matrix_transposed, non_homogeneous_mask=None
     )
     print("Next states shape:", result.shape)  # Expected: (2, 3, 1)
     print("Next states:", result)
