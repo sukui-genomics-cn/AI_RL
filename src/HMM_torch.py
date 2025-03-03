@@ -197,7 +197,10 @@ class EmissionModel(torch.nn.Module):
 
     def forward(self, x_t):
         log_emission_matrix = torch.nn.functional.log_softmax(self.unnormalized_emission_matrix, dim=1)
-        out = log_emission_matrix[:, x_t].transpose(0, 1)  # change 0 dim to 1 dim
+        if x_t.shape[-1] == self.M:
+            out = torch.mm(log_emission_matrix, x_t.transpose(0, 1)).transpose(0, 1)# matrix multiplication
+        else:
+            out = log_emission_matrix[:, x_t].transpose(0, 1)  # change 0 dim to 1 dim
         return out
 
 
@@ -230,7 +233,7 @@ class Trainer:
         train_loss = 0
         num_samples = 0
         self.model.train()
-        print_interval = 50
+        print_interval = 500
 
         for idx, batch in enumerate(tqdm(dataset.loader)):
             x, T = batch
@@ -288,24 +291,26 @@ def main_single():
     # In state 0, only allow consonants; in state 1, only allow vowels
     vowel_indices = torch.tensor([alphabet.index(letter) for letter in "aeiou"])
     consonant_indices = torch.tensor([alphabet.index(letter) for letter in "bcdfghjklmnpqrstvwxyz"])
-    model.emission_model.unnormalized_emission_matrix[0, vowel_indices] = -np.inf
-    model.emission_model.unnormalized_emission_matrix[1, consonant_indices] = -np.inf
+    model.emission_model.unnormalized_emission_matrix[0, vowel_indices] = -100
+    model.emission_model.unnormalized_emission_matrix[1, consonant_indices] = -100
     print("Emission matrix:", torch.nn.functional.softmax(model.emission_model.unnormalized_emission_matrix, dim=1))
 
     # Only allow vowel -> consonant and consonant -> vowel
-    model.transition_model.unnormalized_transition_matrix[0, 0] = -np.inf  # consonant -> consonant
+    model.transition_model.unnormalized_transition_matrix[0, 0] = -100  # consonant -> consonant
     model.transition_model.unnormalized_transition_matrix[0, 1] = 0.  # vowel -> consonant
     model.transition_model.unnormalized_transition_matrix[1, 0] = 0.  # consonant -> vowel
-    model.transition_model.unnormalized_transition_matrix[1, 1] = -np.inf  # vowel -> vowel
+    model.transition_model.unnormalized_transition_matrix[1, 1] = -100  # vowel -> vowel
     print("Transition matrix:",
           torch.nn.functional.softmax(model.transition_model.unnormalized_transition_matrix, dim=0))
 
     # start forward by model
-    x = torch.stack([torch.tensor(tokenizer.encode("cat"))])
+    x = torch.stack([torch.tensor(tokenizer.encode("caa"))])
+    x = torch.eye(model.M)[x]
     T = torch.tensor([3])
     print(model(x, T))
 
     x = torch.stack([torch.tensor(tokenizer.encode("aba")), torch.tensor(tokenizer.encode("abb"))])
+    x = torch.eye(model.M)[x]
     T = torch.tensor([3, 3])
     print(model.forward(x, T))
     """
@@ -317,6 +322,7 @@ def main_single():
     """
 
     x = torch.stack([torch.tensor(tokenizer.encode("aba")), torch.tensor(tokenizer.encode("abb"))])
+    x = torch.eye(model.M)[x]
     T = torch.tensor([3, 3])
     print(model.viterbi(x, T))
 
@@ -350,4 +356,5 @@ def main_train():
 
 
 if __name__ == '__main__':
-    main_train()
+    # main_train()
+    main_single()
