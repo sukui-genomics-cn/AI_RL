@@ -7,6 +7,7 @@ import numpy as np
 from tqdm import tqdm
 
 from dataloader_text import TextDataset, Collate
+from src.kmer import make_k_mers
 
 
 class HMM(torch.nn.Module):
@@ -223,10 +224,11 @@ class EmissionModel(torch.nn.Module):
     def forward(self, x_t):
         log_emission_matrix = torch.nn.functional.log_softmax(self.unnormalized_emission_matrix, dim=1)
         if x_t.shape[-1] == self.M:
-            out = torch.mm(log_emission_matrix, x_t.transpose(0, 1)).transpose(0, 1)# matrix multiplication
+            out = torch.mm(log_emission_matrix, x_t.transpose(0, 1)).transpose(0, 1)  # matrix multiplication
         else:
             out = log_emission_matrix[:, x_t].transpose(0, 1)  # change 0 dim to 1 dim
         return out
+
 
 class GeneEmissionModel(torch.nn.Module):
     def __init__(self, N, M):
@@ -234,11 +236,6 @@ class GeneEmissionModel(torch.nn.Module):
         self.N = N
         self.M = M
         self.B = torch.nn.Parameter(torch.randn(N, M))
-        codon_probs = np.load('codon_probs.npy')
-        self.codon_probs = torch.from_numpy(codon_probs).float()
-        self.nucleotide_probs = torch.nn.Parameter(torch.ones(3, 4)/4)
-
-
 
     def forward(self, x_t):
         log_emission_matrix = torch.nn.functional.log_softmax(self.B, dim=1)
@@ -248,6 +245,40 @@ class GeneEmissionModel(torch.nn.Module):
             emit = log_emission_matrix[:, x_t].transpose(0, 1)  # change 0 dim to 1 dim
 
         return emit
+
+
+class GeneSeqEmissionModel(torch.nn.Module):
+    def __init__(self, N, M):
+        super(GeneSeqEmissionModel, self).__init__()
+        self.N = N
+        self.M = M
+        codon_probs = np.load('codon_probs.npy')
+        self.codon_probs = torch.from_numpy(codon_probs).float()
+        self.nucleotide_probs = torch.nn.Parameter(torch.ones(3, 4) / 4)
+
+    def forward(self, nucleotides):
+        batch, length, dim = nucleotides.shape
+        assert dim == 5, "nucleotides should have 5 channels, which including AGCTN"
+        nucleotides = torch.reshape(nucleotides, [-1, length, 5])
+        # compute probabilities to start the first exon or intorns and the probabilities to end the last exon or intorns
+        left_3mers = make_k_mers(nucleotides, k=3, pivot_left=True)
+        left_3mers = torch.reshape(left_3mers, (batch, length, 64))
+
+        right_3mers = make_k_mers(nucleotides, k=3, pivot_left=False)
+        right_3mers = torch.reshape(right_3mers, (batch, length, 64))
+
+        input_3mers = torch.stack([left_3mers, right_3mers], dim=-2)
+        codon_emission_probs = torch.einsum('...ij,ij->...i', input_3mers, self.codon_probs)
+        codon_emission_probs = torch.prod(codon_emission_probs, dim=-2)
+        codon_emission_probs = torch.concat(
+            [torch.ones_like(codon_emission_probs[:, :6]) / 4096.0, codon_emission_probs], dim=-1)
+        codon_emission_probs += 1e-7
+
+        # compute probabilities in nucleotides at exons.
+        nucleotides_no_N = nucleotides[..., :4] + nucleotides[..., 4:] / 4
+        nucleotide_emission_probs = torch.einsum('...ij,ij->...i', nucleotides_no_N, self.nucleotide_probs)
+
+        return codon_emission_probs, nucleotide_emission_probs
 
 
 class CharTokenizer:
@@ -270,11 +301,12 @@ class CharTokenizer:
 
 
 class Trainer:
-    def __init__(self, model, lr, tokenizer:CharTokenizer):
-        self.model:HMM = model
+    def __init__(self, model, lr, tokenizer: CharTokenizer):
+        self.model: HMM = model
         self.lr = lr
         self.optimizer = torch.optim.Adam(model.parameters(), lr=self.lr, weight_decay=0.00001)
         self.tokenizer = tokenizer
+
     def train(self, dataset):
         train_loss = 0
         num_samples = 0
@@ -372,6 +404,7 @@ def main_single():
     T = torch.tensor([3, 3])
     z_start, best_path_scores = model.viterbi(x, T)
     print(z_start)
+
 
 def main_train():
     filename = "./datasets/training.txt"
