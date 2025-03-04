@@ -78,6 +78,31 @@ class HMM(torch.nn.Module):
         log_probs = torch.gather(log_sums, 1, T.view(-1, 1) - 1)
         return log_probs
 
+    def forward_viterbi(self, x):
+        """
+        Compute the most likely state sequence for each example in the batch
+        :param x: (batch_size, T) tensor of observations
+        :return:
+        """
+        if self.is_cuda:
+            x = x.cuda()
+
+        batch_size = x.shape[0]
+        T_max = x.shape[1]
+        log_state_priors = torch.nn.functional.log_softmax(self.unnormalized_state_priors, dim=0)
+        log_delta = torch.zeros(batch_size, T_max, self.N).float()
+        psi = torch.zeros(batch_size, T_max, self.N).long()
+        if self.is_cuda:
+            log_delta = log_delta.cuda()
+            psi = psi.cuda()
+        log_delta[:, 0, :] = self.emission_model(x[:, 0]) + log_state_priors
+        for t in range(1, T_max):
+            log_delta[:, t, :] = self.emission_model(x[:, t]) + self.transition_model(log_alpha[:, t - 1, :])
+        # Get the log probability of the best path
+        log_max = log_delta.max(dim=2)[0]
+
+        return log_max
+
     def viterbi(self, x, T):
         """
         Find argmax_z log p(x|z) for each (x) in the batch.
@@ -203,6 +228,27 @@ class EmissionModel(torch.nn.Module):
             out = log_emission_matrix[:, x_t].transpose(0, 1)  # change 0 dim to 1 dim
         return out
 
+class GeneEmissionModel(torch.nn.Module):
+    def __init__(self, N, M):
+        super(GeneEmissionModel, self).__init__()
+        self.N = N
+        self.M = M
+        self.B = torch.nn.Parameter(torch.randn(N, M))
+        codon_probs = np.load('codon_probs.npy')
+        self.codon_probs = torch.from_numpy(codon_probs).float()
+        self.nucleotide_probs = torch.nn.Parameter(torch.ones(3, 4)/4)
+
+
+
+    def forward(self, x_t):
+        log_emission_matrix = torch.nn.functional.log_softmax(self.B, dim=1)
+        if x_t.shape[-1] == self.M:
+            emit = torch.einsum('...s,qs->...q', log_emission_matrix, x_t)
+        else:
+            emit = log_emission_matrix[:, x_t].transpose(0, 1)  # change 0 dim to 1 dim
+
+        return emit
+
 
 class CharTokenizer:
     def __init__(self, alphabet):
@@ -225,7 +271,7 @@ class CharTokenizer:
 
 class Trainer:
     def __init__(self, model, lr, tokenizer:CharTokenizer):
-        self.model = model
+        self.model:HMM = model
         self.lr = lr
         self.optimizer = torch.optim.Adam(model.parameters(), lr=self.lr, weight_decay=0.00001)
         self.tokenizer = tokenizer
@@ -324,7 +370,8 @@ def main_single():
     x = torch.stack([torch.tensor(tokenizer.encode("aba")), torch.tensor(tokenizer.encode("abb"))])
     x = torch.eye(model.M)[x]
     T = torch.tensor([3, 3])
-    print(model.viterbi(x, T))
+    z_start, best_path_scores = model.viterbi(x, T)
+    print(z_start)
 
 def main_train():
     filename = "./datasets/training.txt"
