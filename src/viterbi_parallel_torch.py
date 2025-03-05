@@ -58,9 +58,9 @@ def viterbi_dyn_prog(emission_probs, init, transition_matrix, use_first_position
     # Handle first position emission
     b0 = emission_probs[:, :, 0]  # Shape: (num_models, b, q)
     if use_first_position_emission:
-        gamma_val += safe_log(b0).unsqueeze(2)  # Shape: (num_models, b, z, q)
+        gamma_val = gamma_val + safe_log(b0).unsqueeze(2)  # Shape: (num_models, b, z, q)
     else:
-        gamma_val += torch.zeros_like(b0).unsqueeze(2)  # Shape: (num_models, b, z, q)
+        gamma_val = gamma_val + torch.zeros_like(b0).unsqueeze(2)  # Shape: (num_models, b, z, q)
 
     # Get sequence length L
     L = emission_probs.size(2)
@@ -185,7 +185,11 @@ def viterbi_backtracking_step(prev_states, gamma_state, transition_matrix_transp
     """
     if non_homogeneous_mask is None:
         if transition_matrix_transposed.dim() == prev_states.dim() + 1:
-            A_prev_states = torch.gather(transition_matrix_transposed, -2, prev_states.unsqueeze(-1)).squeeze(-1)
+            A_prev_states = torch.take_along_dim(transition_matrix_transposed, prev_states.unsqueeze(-1), -2).squeeze(-1)
+            if A_prev_states.dim() != gamma_state.dim():
+                A_prev_states = A_prev_states.squeeze(-2)
+        elif transition_matrix_transposed.dim() == prev_states.dim():
+            A_prev_states = torch.take_along_dim(transition_matrix_transposed, prev_states, -2)
         else:
             A_prev_states = torch.gather(transition_matrix_transposed, -2, prev_states)
     else:
@@ -202,7 +206,7 @@ def viterbi_backtracking_step(prev_states, gamma_state, transition_matrix_transp
     return next_states.to(dtype=output_type)
 
 
-def viterbi_backtracking(gamma, transition_matrix_transposed, output_type=torch.int32, non_homogeneous_mask_func=None):
+def viterbi_backtracking(gamma, transition_matrix_transposed, output_type=torch.int64, non_homogeneous_mask_func=None):
     """ Performs backtracking on Viterbi score tables.
     Args:
         gamma: A Viterbi score table per model and batch element. Shape (num_model, b, L, q)
@@ -309,7 +313,7 @@ def viterbi_full_chunk_backtracking(viterbi_chunk_borders, local_gamma, transiti
     return state_seqs_max_lik
 
 
-def viterbi_parallel(emission_probs, gamma, parallel_factor, A, At, init_dist):
+def viterbi_parallel(emission_probs, parallel_factor, A, At, init_dist):
     """ Placeholder function for parallel Viterbi decoding. """
     num_model, nums, chunk_size, q = emission_probs.shape
     b = nums // parallel_factor
@@ -317,29 +321,78 @@ def viterbi_parallel(emission_probs, gamma, parallel_factor, A, At, init_dist):
     init = init_dist if parallel_factor == 1 else torch.eye(q, device=emission_probs.device).unsqueeze(0)
     z = init.size(1)
 
+    gamma = viterbi_dyn_prog(emission_probs, init, A,
+                             use_first_position_emission=parallel_factor == 1,
+                             non_homogeneous_mask_func=None)
+
     gamma = gamma.view(num_model, b * parallel_factor * z, chunk_size, q)
-    emission_probs_at_chunk_start = emission_probs[:, :, 0].view(num_model, b, parallel_factor, q)
-    gamma_local_at_chunk_end = gamma[:, :, -1].view(num_model, b, parallel_factor, q, q)
+    if parallel_factor == 1:
+        viterbi_paths = viterbi_backtracking(gamma, At, non_homogeneous_mask_func=None)
+        variables_out = gamma
+    else:
+        emission_probs_at_chunk_start = emission_probs[:, :, 0].view(num_model, b, parallel_factor, q)
+        gamma_local_at_chunk_end = gamma[:, :, -1].view(num_model, b, parallel_factor, q, q)
 
-    gamma_at_chunk_borders = viterbi_chunk_dyn_prog(emission_probs_at_chunk_start, init_dist[:, 0], A,
-                                                    gamma_local_at_chunk_end)
-    gamma_local_at_chunk_end = gamma_local_at_chunk_end.transpose(-1, -2)
+        gamma_at_chunk_borders = viterbi_chunk_dyn_prog(emission_probs_at_chunk_start, init_dist[:, 0], A,
+                                                        gamma_local_at_chunk_end)
+        gamma_local_at_chunk_end = gamma_local_at_chunk_end.transpose(-1, -2)
 
-    At_parallel = At.unsqueeze(0).repeat(num_model, parallel_factor, 1, 1)
-    viterbi_chunk_borders = viterbi_chunk_backtracking(gamma_at_chunk_borders, gamma_local_at_chunk_end, At_parallel)
+        At_parallel = At.unsqueeze(0)
+        viterbi_chunk_borders = viterbi_chunk_backtracking(gamma_at_chunk_borders, gamma_local_at_chunk_end,
+                                                           At_parallel)
 
-    gamma = gamma.view(num_model, b, parallel_factor, z, chunk_size, q)
-    viterbi_paths = viterbi_full_chunk_backtracking(viterbi_chunk_borders, gamma, At)
+        gamma = gamma.view(num_model, b, parallel_factor, z, chunk_size, q)
+        viterbi_paths = viterbi_full_chunk_backtracking(viterbi_chunk_borders, gamma, At)
+        variables_out = gamma
 
-    return viterbi_paths
+    return viterbi_paths, gamma
 
 
 if __name__ == '__main__':
-    emission_probs = torch.randn((1, 4, 8, 15))
-    gamma = torch.randn((1, 2, 2, 15, 8, 15))
-    A = torch.randn((1, 15, 15))
-    At = A.transpose(1, 2)
-    parallel_factor = 2
-    init_dist = torch.randn((1, 1, 15))
+    # emission_probs = torch.randn((1, 2, 2, 3))
+    # A = torch.randn((1, 2, 2))
+    # At = A.transpose(1, 2)
+    # parallel_factor = 1
+    # init_dist = torch.randn((1, 1, 2))
 
-    viterbi_parallel(emission_probs, gamma, parallel_factor, A, At, init_dist)
+    # emission_probs = torch.Tensor([[[[0.5, 0.4, 0.1], [0.1, 0.3, 0.6], [0.1, 0.3, 0.6]]]])
+    # A = torch.Tensor([[[0.7, 0.2, 0.1], [0.4, 0.5, 0.1], [0.4, 0.5, 0.1]]])
+    # At = A.transpose(1, 2)
+    # parallel_factor = 1
+    # init_dist = torch.Tensor([[[0.6, 0.3, 0.1]]])
+
+    # 初始概率（log形式）
+    init_dist = torch.log(torch.tensor([[[0.6, 0.3, 0.1]]]))  # 初始更可能是晴天
+
+    # 转移概率矩阵（log形式）
+    A = torch.log(torch.tensor([[
+        [0.7, 0.3, 0.1],  # 晴天 -> 晴天/雨天
+        [0.4, 0.6, 0.1],  # 雨天 -> 晴天/雨天
+        [0.2, 0.3, 0.5]  # 阴天 -> 晴天/雨天
+    ]]))
+    At = A.transpose(1, 2)
+
+    # 发射概率矩阵（log形式）
+    emission_probs = torch.log(torch.tensor([[[
+        [0.5, 0.3, 0.2],  # 晴天时的活动概率
+        [0.1, 0.4, 0.5],  # 雨天时的活动概率
+        [0.1, 0.1, 0.8],  # 阴天时的活动概率
+        [0.5, 0.2, 0.3],  # 阴天时的活动概率
+        [0.5, 0.0, 0.5],  # 晴天时的活动概率
+        [0.1, 0.1, 0.8],  # 雨天时的活动概率
+        [0.5, 0.1, 0.8],  # 阴天时的活动概率
+        [0.5, 3.2, 0.3],  # 阴天时的活动概率
+        [0.5, 0.3, 0.2],  # 晴天时的活动概率
+        [0.1, 0.4, 0.5],  # 雨天时的活动概率
+        [0.1, 0.1, 0.8],  # 阴天时的活动概率
+        [0.5, 0.2, 0.3],  # 阴天时的活动概率
+        [0.5, 0.0, 0.5],  # 晴天时的活动概率
+        [0.1, 0.1, 0.8],  # 雨天时的活动概率
+        [0.5, 0.1, 0.8],  # 阴天时的活动概率
+        [0.5, 3.2, 0.3],  # 阴天时的活动概率
+    ]]]))
+    emission_probs = emission_probs.reshape(1, 1, 16, 3)
+    parallel_factor = 1
+
+    best_path = viterbi_parallel(emission_probs, parallel_factor, A, At, init_dist)
+    print(best_path)

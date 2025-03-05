@@ -233,7 +233,7 @@ def viterbi_full_chunk_backtracking(viterbi_chunk_borders, local_gamma, transiti
     return state_seqs_max_lik
 
 
-def viterbi_parallel(emission_probs, gamma, parallel_factor, A, At, init_dist):
+def viterbi_parallel(emission_probs, parallel_factor, A, At, init_dist):
     """ Placeholder function for parallel Viterbi decoding. """
 
     # compute (global) Viterbi values at the chunk borders
@@ -242,6 +242,10 @@ def viterbi_parallel(emission_probs, gamma, parallel_factor, A, At, init_dist):
 
     init = init_dist if parallel_factor == 1 else tf.eye(q)[tf.newaxis]
     z = tf.shape(init)[1]
+
+    gamma = viterbi_dyn_prog(emission_probs, init, A,
+                             use_first_position_emission=parallel_factor == 1,
+                             non_homogeneous_mask_func=None)
 
     gamma = tf.reshape(gamma, (num_model, b * parallel_factor * z, chunk_size, q))
 
@@ -260,12 +264,46 @@ def viterbi_parallel(emission_probs, gamma, parallel_factor, A, At, init_dist):
 
 
 if __name__ == '__main__':
-    with tf.device("/device:GPU:0"):
-        emission_probs = tf.random.uniform((1, 4, 8, 15))
-        gamma = tf.random.uniform((1, 2, 2, 15, 8, 15))
-        A = tf.random.uniform((1, 15, 15))
-        At = tf.transpose(A, [0, 2, 1])
-        parallel_factor = tf.constant(2)
-        init_dist = tf.random.uniform((1, 1, 15))
+    import tensorflow as tf
 
-        viterbi_parallel(emission_probs, gamma, parallel_factor, A, At, init_dist)
+    # 初始状态分布（log形式）
+    init_dist = tf.math.log(tf.constant([[[0.6, 0.3, 0.1]]]))  # 初始更可能是晴天
+
+    # 转移概率矩阵（log形式）
+    A = tf.math.log(tf.constant([[
+        [0.7, 0.3, 0.1],  # 晴天 -> 晴天/雨天
+        [0.4, 0.6, 0.1],  # 雨天 -> 晴天/雨天
+        [0.2, 0.3, 0.5]  # 阴天 -> 晴天/雨天
+    ]]))
+    At = tf.transpose(A, perm=[0, 2, 1])  # 转置转移矩阵
+
+    # 发射概率矩阵（log形式）
+    emission_probs = tf.math.log(tf.constant([[[
+        [0.5, 0.3, 0.2],  # 晴天时的活动概率
+        [0.1, 0.4, 0.5],  # 雨天时的活动概率
+        [0.1, 0.1, 0.8],  # 阴天时的活动概率
+        [0.5, 0.2, 0.3],  # 阴天时的活动概率
+        [0.5, 0.0, 0.5],  # 晴天时的活动概率
+        [0.1, 0.1, 0.8],  # 雨天时的活动概率
+        [0.5, 0.1, 0.8],  # 阴天时的活动概率
+        [0.5, 3.2, 0.3],  # 阴天时的活动概率
+        [0.5, 0.3, 0.2],  # 晴天时的活动概率
+        [0.1, 0.4, 0.5],  # 雨天时的活动概率
+        [0.1, 0.1, 0.8],  # 阴天时的活动概率
+        [0.5, 0.2, 0.3],  # 阴天时的活动概率
+        [0.5, 0.0, 0.5],  # 晴天时的活动概率
+        [0.1, 0.1, 0.8],  # 雨天时的活动概率
+        [0.5, 0.1, 0.8],  # 阴天时的活动概率
+        [0.5, 3.2, 0.3],  # 阴天时的活动概率
+    ]]]))
+    emission_probs = tf.reshape(emission_probs, (1, 2, 8, 3))
+    with tf.device("/device:GPU:0"):
+        # emission_probs = tf.random.uniform((1, 4, 8, 15))
+        # gamma = tf.random.uniform((1, 2, 2, 15, 8, 15))
+        # A = tf.random.uniform((1, 15, 15))
+        # At = tf.transpose(A, [0, 2, 1])
+        # parallel_factor = tf.constant(2)
+        # init_dist = tf.random.uniform((1, 1, 15))
+        parallel_factor = 2
+
+        viterbi_parallel(emission_probs, parallel_factor, A, At, init_dist)
