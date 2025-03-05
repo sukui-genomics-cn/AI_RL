@@ -86,6 +86,8 @@ def viterbi_dyn_prog(emission_probs, init, transition_matrix, use_first_position
     gamma = torch.stack(gamma_list, dim=3)  # Shape: (num_models, b, z, L, q)
 
     return gamma
+
+
 #
 #
 # def viterbi_chunk_step(gamma_prev, local_gamma):
@@ -182,11 +184,19 @@ def viterbi_backtracking_step(prev_states, gamma_state, transition_matrix_transp
         Next states. Shape: (num_model, b, 1)
     """
     if non_homogeneous_mask is None:
-        A_prev_states = torch.gather(transition_matrix_transposed, -2, prev_states.unsqueeze(-1)).squeeze(-1)
+        if transition_matrix_transposed.dim() == prev_states.dim() + 1:
+            A_prev_states = torch.gather(transition_matrix_transposed, -2, prev_states.unsqueeze(-1)).squeeze(-1)
+        else:
+            A_prev_states = torch.gather(transition_matrix_transposed, -2, prev_states)
     else:
-        A_prev_states = torch.gather(
-            transition_matrix_transposed + safe_log(non_homogeneous_mask.transpose(-1, -2)), -2,
-            prev_states.unsqueeze(-1)).squeeze(-1)
+        if transition_matrix_transposed.dim() == prev_states.dim() + 1:
+            A_prev_states = torch.gather(
+                transition_matrix_transposed + safe_log(non_homogeneous_mask.transpose(-1, -2)), -2,
+                prev_states.unsqueeze(-1)).squeeze(-1)
+        else:
+            A_prev_states = torch.gather(
+                transition_matrix_transposed + safe_log(non_homogeneous_mask.transpose(-1, -2)), -2,
+                prev_states)
 
     next_states = torch.argmax(A_prev_states + gamma_state, dim=-1, keepdim=True)
     return next_states.to(dtype=output_type)
@@ -231,22 +241,41 @@ def viterbi_chunk_backtracking(gamma, local_gamma_end_transposed, transition_mat
     Returns:
         Most likely states at the chunk borders. Shape (num_model, b, num_chunks, 2).
     """
+    # Initialize current states with the last chunk's end states
     cur_states = torch.argmax(gamma[:, :, -1, 1], dim=-1, keepdim=True)  # Shape: (num_model, b, 1)
     num_chunks = gamma.size(2)
+
+    # Initialize a list to store the most likely states
     state_seqs_max_lik = [cur_states]
 
-    for i in range(num_chunks - 1, -1, -1):
-        cur_states = viterbi_backtracking_step(cur_states, gamma[:, :, i, 0], local_gamma_end_transposed[:, :, i],
-                                               output_type)
+    # Backtracking for the last chunk
+    cur_states = viterbi_backtracking_step(cur_states, gamma[:, :, -1, 0], local_gamma_end_transposed[:, :, -1],
+                                           output_type)
+    state_seqs_max_lik.append(cur_states)
+
+    # Backtracking for the remaining chunks
+    for i in range(1, num_chunks):
+        # Backtrack to the start of the current chunk
+        cur_states = viterbi_backtracking_step(cur_states, gamma[:, :, -1 - i, 1], transition_matrix_transposed,
+                                               output_type,
+                                               non_homogeneous_mask_func(
+                                                   num_chunks - i) if non_homogeneous_mask_func is not None else None)
         state_seqs_max_lik.append(cur_states)
 
-    state_seqs_max_lik = torch.cat(state_seqs_max_lik[::-1], dim=-1)  # Shape: (num_model, b, num_chunks * 2)
+        # Backtrack to the end of the previous chunk
+        cur_states = viterbi_backtracking_step(cur_states, gamma[:, :, -1 - i, 0],
+                                               local_gamma_end_transposed[:, :, -1 - i], output_type)
+        state_seqs_max_lik.append(cur_states)
+
+    # Stack and reshape the results
+    state_seqs_max_lik = torch.cat(state_seqs_max_lik[::-1], dim=-1)  # Shape: (num_model, b, 2 * num_chunks)
     state_seqs_max_lik = state_seqs_max_lik.view(state_seqs_max_lik.size(0), state_seqs_max_lik.size(1), num_chunks, 2)
+
     return state_seqs_max_lik
 
 
 def viterbi_full_chunk_backtracking(viterbi_chunk_borders, local_gamma, transition_matrix_transposed,
-                                    output_type=torch.int32, non_homogeneous_mask_func=None):
+                                    output_type=torch.int64, non_homogeneous_mask_func=None):
     """ Given the optimal end points for each chunk, determines the full Viterbi state sequence.
     Args:
         viterbi_chunk_borders: Most likely states at the chunk borders. Shape (num_model, b, num_chunks, 2)
@@ -263,8 +292,7 @@ def viterbi_full_chunk_backtracking(viterbi_chunk_borders, local_gamma, transiti
     start_states = viterbi_chunk_borders[:, :, :, 0].view(num_model, b * num_chunks, 1)
     end_states = viterbi_chunk_borders[:, :, :, 1].view(num_model, b * num_chunks, 1)
 
-    local_gamma = torch.gather(local_gamma, 2, start_states.unsqueeze(-1).expand(-1, -1, -1, chunk_length, q)).squeeze(
-        2)
+    local_gamma = torch.take_along_dim(local_gamma, start_states.unsqueeze(-1).unsqueeze(-1), dim=2)[:, :, 0]
 
     cur_states = end_states
     state_seqs_max_lik = [cur_states]
@@ -296,7 +324,9 @@ def viterbi_parallel(emission_probs, gamma, parallel_factor, A, At, init_dist):
     gamma_at_chunk_borders = viterbi_chunk_dyn_prog(emission_probs_at_chunk_start, init_dist[:, 0], A,
                                                     gamma_local_at_chunk_end)
     gamma_local_at_chunk_end = gamma_local_at_chunk_end.transpose(-1, -2)
-    viterbi_chunk_borders = viterbi_chunk_backtracking(gamma_at_chunk_borders, gamma_local_at_chunk_end, At)
+
+    At_parallel = At.unsqueeze(0).repeat(num_model, parallel_factor, 1, 1)
+    viterbi_chunk_borders = viterbi_chunk_backtracking(gamma_at_chunk_borders, gamma_local_at_chunk_end, At_parallel)
 
     gamma = gamma.view(num_model, b, parallel_factor, z, chunk_size, q)
     viterbi_paths = viterbi_full_chunk_backtracking(viterbi_chunk_borders, gamma, At)
