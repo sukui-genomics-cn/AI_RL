@@ -1,17 +1,6 @@
 import torch
 
 
-#
-# def safe_log(x, log_zero_val=-1e3):
-#     """ Computes element-wise logarithm with output_i=log_zero_val where x_i=0.
-#     """
-#     epsilon = torch.finfo(torch.float32).tiny
-#     log_x = torch.log(torch.clamp(x, min=epsilon))
-#     zero_mask = (x == 0).to(dtype=log_x.dtype)
-#     log_x = (1 - zero_mask) * log_x + zero_mask * log_zero_val
-#     return log_x
-#
-#
 def viterbi_step(gamma_prev, emission_probs_i, transition_matrix, non_homogeneous_mask=None):
     """ Computes one Viterbi dynamic programming step. z is a helper dimension for parallelization and not used in the final result.
     Args:
@@ -86,26 +75,6 @@ def viterbi_dyn_prog(emission_probs, init, transition_matrix, use_first_position
     gamma = torch.stack(gamma_list, dim=3)  # Shape: (num_models, b, z, L, q)
 
     return gamma
-
-
-#
-#
-# def viterbi_chunk_step(gamma_prev, local_gamma):
-#     """ A variant of the Viterbi step that is used in the parallel variant of Viterbi.
-#     Args:
-#         gamma_prev: Viterbi values of the previous recursion. Shape (num_models, b, q)
-#         local_gamma: Logarithmic transition matrices describing the transition from chunk start to end. Shape (num_models, b, q, q)
-#     Returns:
-#         Viterbi values of the current recursion (gamma_next). Shape (num_models, b, q)
-#     """
-#     # Add a dimension to gamma_prev for broadcasting
-#     gamma_next = local_gamma + gamma_prev.unsqueeze(-1)  # Shape: (num_models, b, q, q)
-#
-#     # Reduce over the last dimension (q) to get the maximum values
-#     gamma_next, _ = torch.max(gamma_next, dim=-2)  # Shape: (num_models, b, q)
-#
-#     return gamma_next
-#
 
 
 def safe_log(x, log_zero_val=-1e3):
@@ -344,8 +313,10 @@ def viterbi_parallel(emission_probs, parallel_factor, A, At, init_dist):
 
         gamma = gamma.view(num_model, b, parallel_factor, z, chunk_size, q)
         viterbi_paths = viterbi_full_chunk_backtracking(viterbi_chunk_borders, gamma, At)
+        print(gamma)
         num_model, b, num_chunks, q, chunk_length, _ = gamma.shape
-        variables_out = gamma.transpose(-2, -3).reshape(num_model, b, num_chunks * chunk_length, q, q)
+        variables_out = gamma.transpose(-2, -3)
+        variables_out = variables_out.reshape(num_model, b, num_chunks * chunk_length, q, q)
 
     return viterbi_paths, variables_out
 
@@ -399,3 +370,4 @@ if __name__ == '__main__':
     viterbi_paths, gamma = viterbi_parallel(emission_probs, parallel_factor, A, At, init_dist)
     print(viterbi_paths)
     print(gamma.shape)
+    print(gamma[0])

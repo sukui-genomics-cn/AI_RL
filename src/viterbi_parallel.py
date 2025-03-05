@@ -260,7 +260,12 @@ def viterbi_parallel(emission_probs, parallel_factor, A, At, init_dist):
     # compute full state sequences
     gamma = tf.reshape(gamma, (num_model, b, parallel_factor, z, chunk_size, q))
     viterbi_paths = viterbi_full_chunk_backtracking(viterbi_chunk_borders, gamma, At)
-    variables_out = gamma
+    num_model, b, num_chunks, q, chunk_length, _ = gamma.shape
+    variables_out = tf.transpose(gamma, [0, 1, 2, 4, 3, 5])
+
+    print(gamma)
+    variables_out = tf.reshape(variables_out, (num_model, b, num_chunks * chunk_length, q, q))
+    return viterbi_paths, variables_out
 
 
 if __name__ == '__main__':
@@ -296,7 +301,7 @@ if __name__ == '__main__':
         [0.5, 0.1, 0.8],  # 阴天时的活动概率
         [0.5, 3.2, 0.3],  # 阴天时的活动概率
     ]]]))
-    emission_probs = tf.reshape(emission_probs, (1, 2, 8, 3))
+    emission_probs = tf.reshape(emission_probs, (1, 4, 4, 3))
     with tf.device("/device:GPU:0"):
         # emission_probs = tf.random.uniform((1, 4, 8, 15))
         # gamma = tf.random.uniform((1, 2, 2, 15, 8, 15))
@@ -306,4 +311,7 @@ if __name__ == '__main__':
         # init_dist = tf.random.uniform((1, 1, 15))
         parallel_factor = 2
 
-        viterbi_parallel(emission_probs, parallel_factor, A, At, init_dist)
+        viterbi_paths, gamma = viterbi_parallel(emission_probs, parallel_factor, A, At, init_dist)
+        print(viterbi_paths)
+        print(gamma.shape)
+        print(gamma[0])
