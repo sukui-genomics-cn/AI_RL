@@ -1,0 +1,315 @@
+import torch
+
+
+#
+# def safe_log(x, log_zero_val=-1e3):
+#     """ Computes element-wise logarithm with output_i=log_zero_val where x_i=0.
+#     """
+#     epsilon = torch.finfo(torch.float32).tiny
+#     log_x = torch.log(torch.clamp(x, min=epsilon))
+#     zero_mask = (x == 0).to(dtype=log_x.dtype)
+#     log_x = (1 - zero_mask) * log_x + zero_mask * log_zero_val
+#     return log_x
+#
+#
+def viterbi_step(gamma_prev, emission_probs_i, transition_matrix, non_homogeneous_mask=None):
+    """ Computes one Viterbi dynamic programming step. z is a helper dimension for parallelization and not used in the final result.
+    Args:
+        gamma_prev: Viterbi values of the previous recursion. Shape (num_models, b, z, q)
+        emission_probs_i: Emission probabilities of the i-th vertical input slice. Shape (num_models, b, q)
+        transition_matrix: Logarithmic transition matrices describing the Markov chain. Shape (num_models, q, q)
+        non_homogeneous_mask: Optional mask of shape (num_models, b, q, q) that specifies which transitions are allowed.
+    Returns:
+        Viterbi values of the current recursion (gamma_next). Shape (num_models, b, z, q)
+    """
+    # Add dimensions to transition_matrix and gamma_prev for broadcasting
+    gamma_next = transition_matrix.unsqueeze(1).unsqueeze(1) + gamma_prev.unsqueeze(-1)  # (n, b, z, q, q)
+
+    # Apply non_homogeneous_mask if provided
+    if non_homogeneous_mask is not None:
+        gamma_next += safe_log(non_homogeneous_mask.unsqueeze(2))  # (n, b, z, q, q)
+
+    # Reduce over the second-to-last dimension (q) to get the maximum values
+    gamma_next, _ = torch.max(gamma_next, dim=-2)  # (n, b, z, q)
+
+    # Add emission probabilities
+    gamma_next += safe_log(emission_probs_i.unsqueeze(2))  # (n, b, z, q)
+
+    return gamma_next
+
+
+def viterbi_dyn_prog(emission_probs, init, transition_matrix, use_first_position_emission=True,
+                     non_homogeneous_mask_func=None):
+    """ Logarithmic (underflow safe) viterbi capable of decoding many sequences in parallel on the GPU.
+    z is a helper dimension for parallelization and not used in the final result.
+    Args:
+        emission_probs: Tensor. Shape (num_models, b, L, q).
+        init: Initial state distribution. Shape (num_models, z, q).
+        transition_matrix: Logarithmic transition matrices describing the Markov chain. Shape (num_models, q, q)
+        use_first_position_emission: If True, the first position of the sequence is considered to have an emission.
+        non_homogeneous_mask_func: Optional function that maps a sequence index i to a num_models x q x q mask that specifies which transitions are allowed.
+    Returns:
+        Viterbi values (gamma) per model. Shape (num_models, b, z, L, q)
+    """
+    # Initialize gamma_val with safe_log of init
+    gamma_val = safe_log(init).unsqueeze(1)  # Shape: (num_models, 1, z, q)
+    gamma_val = gamma_val.to(dtype=transition_matrix.dtype)
+
+    # Handle first position emission
+    b0 = emission_probs[:, :, 0]  # Shape: (num_models, b, q)
+    if use_first_position_emission:
+        gamma_val += safe_log(b0).unsqueeze(2)  # Shape: (num_models, b, z, q)
+    else:
+        gamma_val += torch.zeros_like(b0).unsqueeze(2)  # Shape: (num_models, b, z, q)
+
+    # Get sequence length L
+    L = emission_probs.size(2)
+
+    # Initialize a list to store gamma values for each time step
+    gamma_list = [gamma_val]
+
+    # Iterate over sequence positions
+    for i in range(1, L):
+        # Get emission probabilities for the current position
+        emission_probs_i = emission_probs[:, :, i]  # Shape: (num_models, b, q)
+
+        # Get non_homogeneous_mask if provided
+        non_homogeneous_mask = None
+        if non_homogeneous_mask_func is not None:
+            non_homogeneous_mask = non_homogeneous_mask_func(i)  # Shape: (num_models, q, q)
+
+        # Compute gamma_val for the current step
+        gamma_val = viterbi_step(gamma_val, emission_probs_i, transition_matrix, non_homogeneous_mask)
+        gamma_list.append(gamma_val)
+
+    # Stack gamma values along the time dimension (L)
+    gamma = torch.stack(gamma_list, dim=3)  # Shape: (num_models, b, z, L, q)
+
+    return gamma
+#
+#
+# def viterbi_chunk_step(gamma_prev, local_gamma):
+#     """ A variant of the Viterbi step that is used in the parallel variant of Viterbi.
+#     Args:
+#         gamma_prev: Viterbi values of the previous recursion. Shape (num_models, b, q)
+#         local_gamma: Logarithmic transition matrices describing the transition from chunk start to end. Shape (num_models, b, q, q)
+#     Returns:
+#         Viterbi values of the current recursion (gamma_next). Shape (num_models, b, q)
+#     """
+#     # Add a dimension to gamma_prev for broadcasting
+#     gamma_next = local_gamma + gamma_prev.unsqueeze(-1)  # Shape: (num_models, b, q, q)
+#
+#     # Reduce over the last dimension (q) to get the maximum values
+#     gamma_next, _ = torch.max(gamma_next, dim=-2)  # Shape: (num_models, b, q)
+#
+#     return gamma_next
+#
+
+
+def safe_log(x, log_zero_val=-1e3):
+    """ Computes element-wise logarithm with output_i=log_zero_val where x_i=0.
+    """
+    epsilon = torch.finfo(torch.float32).tiny
+    log_x = torch.log(torch.clamp(x, min=epsilon))
+    zero_mask = (x == 0).to(dtype=log_x.dtype)
+    log_x = (1 - zero_mask) * log_x + zero_mask * log_zero_val
+    return log_x
+
+
+def viterbi_chunk_step(gamma_prev, local_gamma):
+    """ A variant of the Viterbi step that is used in the parallel variant of Viterbi.
+    Args:
+        gamma_prev: Viterbi values of the previous recursion. Shape (num_models, b, q)
+        local_gamma: Logarithmic transition matrices describing the transition from chunk start to end. Shape (num_models, b, q, q)
+    Returns:
+        Viterbi values of the current recursion (gamma_next). Shape (num_models, b, q)
+    """
+    gamma_next = local_gamma + gamma_prev.unsqueeze(-1)  # Shape: (num_models, b, q, q)
+    gamma_next, _ = torch.max(gamma_next, dim=-2)  # Shape: (num_models, b, q)
+    return gamma_next
+
+
+def viterbi_chunk_dyn_prog(emission_probs, init, transition_matrix, local_gamma, non_homogeneous_mask=None):
+    """ A variant of Viterbi that computes the gamma values at the begin and end positions of chunks.
+    Args:
+        emission_probs: Emission probabilities at the starting positions of each chunk. Shape (num_models, b, num_chunks, q).
+        init: Initial state distribution. Shape (num_models, q).
+        transition_matrix: Logarithmic transition matrices describing the Markov chain. Shape (num_models, q, q)
+        local_gamma: Local viterbi values at the end of each chunk. Shape (num_models, b, num_chunks, q, q)
+        non_homogeneous_mask: Optional mask of shape (num_models, b, q, q) that specifies which transitions are allowed.
+    Returns:
+        Viterbi values (gamma) of begin and end positions per chunk. Shape (num_models, b, num_chunks, 2, q)
+    """
+    gamma_val = safe_log(init).unsqueeze(1)  # Shape: (num_models, 1, q)
+    gamma_val = gamma_val.to(dtype=transition_matrix.dtype)
+    b0 = emission_probs[:, :, 0]  # Shape: (num_models, b, q)
+    gamma_val = gamma_val + safe_log(b0)  # Shape: (num_models, b, q)
+
+    num_chunks = emission_probs.size(2)
+    gamma_list = [gamma_val]  # Shape: (num_models, b, 1, q)
+
+    gamma_val = viterbi_chunk_step(gamma_val, local_gamma[:, :, 0])
+    gamma_list.append(gamma_val)  # Shape: (num_models, b, 1, q)
+    # Iterate over chunks
+    for i in range(1, num_chunks):
+        # Compute gamma_val for the current chunk start
+        gamma_val = viterbi_step(gamma_val.unsqueeze(-2), emission_probs[:, :, i], transition_matrix,
+                                 non_homogeneous_mask)[..., 0, :]  # Shape: (num_models, b, q)
+        gamma_list.append(gamma_val)  # Shape: (num_models, b, 1, q)
+
+        # Compute gamma_val for the current chunk end
+        gamma_val = viterbi_chunk_step(gamma_val, local_gamma[:, :, i])  # Shape: (num_models, b, q)
+        gamma_list.append(gamma_val)  # Shape: (num_models, b, 1, q)
+
+    gamma = torch.stack(gamma_list, dim=2)  # Shape: (num_models, b, num_chunks + 1, q)
+    gamma = gamma.view(gamma.size(0), gamma.size(1), num_chunks, 2,
+                       gamma.size(-1))  # Shape: (num_models, b, num_chunks, 2, q)
+
+    return gamma
+
+
+def viterbi_backtracking_step(prev_states, gamma_state, transition_matrix_transposed, output_type,
+                              non_homogeneous_mask=None):
+    """ Computes a Viterbi backtracking step in parallel for all models and batch elements.
+    Args:
+        prev_states: Previously decoded states. Shape: (num_model, b, 1)
+        gamma_state: Viterbi values of the previously decoded states. Shape: (num_model, b, q)
+        transition_matrix_transposed: Transposed logarithmic transition matrices describing the Markov chain.
+                                        Shape (num_models, q, q) or (num_models, b, q, q)
+        output_type: Datatype of the output states.
+        non_homogeneous_mask: Optional mask of shape (num_models, b, q, q) that specifies which transitions are allowed.
+    Returns:
+        Next states. Shape: (num_model, b, 1)
+    """
+    if non_homogeneous_mask is None:
+        A_prev_states = torch.gather(transition_matrix_transposed, -2, prev_states.unsqueeze(-1)).squeeze(-1)
+    else:
+        A_prev_states = torch.gather(
+            transition_matrix_transposed + safe_log(non_homogeneous_mask.transpose(-1, -2)), -2,
+            prev_states.unsqueeze(-1)).squeeze(-1)
+
+    next_states = torch.argmax(A_prev_states + gamma_state, dim=-1, keepdim=True)
+    return next_states.to(dtype=output_type)
+
+
+def viterbi_backtracking(gamma, transition_matrix_transposed, output_type=torch.int32, non_homogeneous_mask_func=None):
+    """ Performs backtracking on Viterbi score tables.
+    Args:
+        gamma: A Viterbi score table per model and batch element. Shape (num_model, b, L, q)
+        transition_matrix_transposed: Transposed logarithmic transition matrices describing the Markov chain.
+                                            Shape (num_models, q, q)
+        output_type: Output type of the state sequences.
+        non_homogeneous_mask_func: Optional function that maps a sequence index i to a num_model x batch x q x q mask that specifies which transitions are allowed.
+    Returns:
+        State sequences. Shape (num_model, b, L).
+    """
+    cur_states = torch.argmax(gamma[:, :, -1], dim=-1, keepdim=True)  # Shape: (num_model, b, 1)
+    L = gamma.size(2)
+    state_seqs_max_lik = [cur_states]
+
+    for i in range(L - 2, -1, -1):
+        cur_states = viterbi_backtracking_step(cur_states, gamma[:, :, i], transition_matrix_transposed, output_type,
+                                               non_homogeneous_mask_func(
+                                                   i + 1) if non_homogeneous_mask_func is not None else None)
+        state_seqs_max_lik.append(cur_states)
+
+    state_seqs_max_lik = torch.cat(state_seqs_max_lik[::-1], dim=-1)  # Shape: (num_model, b, L)
+    return state_seqs_max_lik
+
+
+def viterbi_chunk_backtracking(gamma, local_gamma_end_transposed, transition_matrix_transposed, output_type=torch.int64,
+                               non_homogeneous_mask_func=None):
+    """Performs backtracking on chunk-wise Viterbi score tables.
+    Args:
+        gamma: Viterbi values of begin and end positions per chunk. Shape (num_model, b, num_chunks, 2, q)
+        local_gamma_end_transposed: Local viterbi values at the end of each chunk (transposed output of viterbi_chunk_dyn_prog).
+                                Shape (num_models, b, num_chunks, q, q)
+        transition_matrix_transposed: Transposed logarithmic transition matrices describing the Markov chain.
+                                            Shape (num_models, q, q)
+        output_type: Output type of the state sequences.
+        non_homogeneous_mask_func: Optional function that maps a sequence index i to a num_model x batch x q x q mask that specifies which transitions are allowed.
+    Returns:
+        Most likely states at the chunk borders. Shape (num_model, b, num_chunks, 2).
+    """
+    cur_states = torch.argmax(gamma[:, :, -1, 1], dim=-1, keepdim=True)  # Shape: (num_model, b, 1)
+    num_chunks = gamma.size(2)
+    state_seqs_max_lik = [cur_states]
+
+    for i in range(num_chunks - 1, -1, -1):
+        cur_states = viterbi_backtracking_step(cur_states, gamma[:, :, i, 0], local_gamma_end_transposed[:, :, i],
+                                               output_type)
+        state_seqs_max_lik.append(cur_states)
+
+    state_seqs_max_lik = torch.cat(state_seqs_max_lik[::-1], dim=-1)  # Shape: (num_model, b, num_chunks * 2)
+    state_seqs_max_lik = state_seqs_max_lik.view(state_seqs_max_lik.size(0), state_seqs_max_lik.size(1), num_chunks, 2)
+    return state_seqs_max_lik
+
+
+def viterbi_full_chunk_backtracking(viterbi_chunk_borders, local_gamma, transition_matrix_transposed,
+                                    output_type=torch.int32, non_homogeneous_mask_func=None):
+    """ Given the optimal end points for each chunk, determines the full Viterbi state sequence.
+    Args:
+        viterbi_chunk_borders: Most likely states at the chunk borders. Shape (num_model, b, num_chunks, 2)
+        local_gamma: Local viterbi values for all chunks Shape (num_models, b, num_chunks, q, chunk_length, q)
+        transition_matrix_transposed: Transposed logarithmic transition matrices describing the Markov chain.
+                                            Shape (num_models, q, q)
+        output_type: Output type of the state sequences.
+        non_homogeneous_mask_func: Optional function that maps a sequence index i to a num_model x batch x q x q mask that specifies which transitions are allowed.
+    Returns:
+        State sequences. Shape (num_model, b, num_chunks * chunk_length).
+    """
+    num_model, b, num_chunks, q, chunk_length, _ = local_gamma.shape
+    local_gamma = local_gamma.view(num_model, b * num_chunks, q, chunk_length, q)
+    start_states = viterbi_chunk_borders[:, :, :, 0].view(num_model, b * num_chunks, 1)
+    end_states = viterbi_chunk_borders[:, :, :, 1].view(num_model, b * num_chunks, 1)
+
+    local_gamma = torch.gather(local_gamma, 2, start_states.unsqueeze(-1).expand(-1, -1, -1, chunk_length, q)).squeeze(
+        2)
+
+    cur_states = end_states
+    state_seqs_max_lik = [cur_states]
+
+    for i in range(chunk_length - 2, -1, -1):
+        cur_states = viterbi_backtracking_step(cur_states, local_gamma[:, :, i], transition_matrix_transposed,
+                                               output_type,
+                                               non_homogeneous_mask_func(
+                                                   i + 1) if non_homogeneous_mask_func is not None else None)
+        state_seqs_max_lik.append(cur_states)
+
+    state_seqs_max_lik = torch.cat(state_seqs_max_lik[::-1], dim=-1)  # Shape: (num_model, b * num_chunks, chunk_length)
+    state_seqs_max_lik = state_seqs_max_lik.view(num_model, b, num_chunks * chunk_length)
+    return state_seqs_max_lik
+
+
+def viterbi_parallel(emission_probs, gamma, parallel_factor, A, At, init_dist):
+    """ Placeholder function for parallel Viterbi decoding. """
+    num_model, nums, chunk_size, q = emission_probs.shape
+    b = nums // parallel_factor
+
+    init = init_dist if parallel_factor == 1 else torch.eye(q, device=emission_probs.device).unsqueeze(0)
+    z = init.size(1)
+
+    gamma = gamma.view(num_model, b * parallel_factor * z, chunk_size, q)
+    emission_probs_at_chunk_start = emission_probs[:, :, 0].view(num_model, b, parallel_factor, q)
+    gamma_local_at_chunk_end = gamma[:, :, -1].view(num_model, b, parallel_factor, q, q)
+
+    gamma_at_chunk_borders = viterbi_chunk_dyn_prog(emission_probs_at_chunk_start, init_dist[:, 0], A,
+                                                    gamma_local_at_chunk_end)
+    gamma_local_at_chunk_end = gamma_local_at_chunk_end.transpose(-1, -2)
+    viterbi_chunk_borders = viterbi_chunk_backtracking(gamma_at_chunk_borders, gamma_local_at_chunk_end, At)
+
+    gamma = gamma.view(num_model, b, parallel_factor, z, chunk_size, q)
+    viterbi_paths = viterbi_full_chunk_backtracking(viterbi_chunk_borders, gamma, At)
+
+    return viterbi_paths
+
+
+if __name__ == '__main__':
+    emission_probs = torch.randn((1, 4, 8, 15))
+    gamma = torch.randn((1, 2, 2, 15, 8, 15))
+    A = torch.randn((1, 15, 15))
+    At = A.transpose(1, 2)
+    parallel_factor = 2
+    init_dist = torch.randn((1, 1, 15))
+
+    viterbi_parallel(emission_probs, gamma, parallel_factor, A, At, init_dist)
