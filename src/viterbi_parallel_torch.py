@@ -185,7 +185,8 @@ def viterbi_backtracking_step(prev_states, gamma_state, transition_matrix_transp
     """
     if non_homogeneous_mask is None:
         if transition_matrix_transposed.dim() == prev_states.dim() + 1:
-            A_prev_states = torch.take_along_dim(transition_matrix_transposed, prev_states.unsqueeze(-1), -2).squeeze(-1)
+            A_prev_states = torch.take_along_dim(transition_matrix_transposed, prev_states.unsqueeze(-1), -2).squeeze(
+                -1)
             if A_prev_states.dim() != gamma_state.dim():
                 A_prev_states = A_prev_states.squeeze(-2)
         elif transition_matrix_transposed.dim() == prev_states.dim():
@@ -343,9 +344,10 @@ def viterbi_parallel(emission_probs, parallel_factor, A, At, init_dist):
 
         gamma = gamma.view(num_model, b, parallel_factor, z, chunk_size, q)
         viterbi_paths = viterbi_full_chunk_backtracking(viterbi_chunk_borders, gamma, At)
-        variables_out = gamma
+        num_model, b, num_chunks, q, chunk_length, _ = gamma.shape
+        variables_out = gamma.transpose(-2, -3).reshape(num_model, b, num_chunks * chunk_length, q, q)
 
-    return viterbi_paths, gamma
+    return viterbi_paths, variables_out
 
 
 if __name__ == '__main__':
@@ -391,8 +393,9 @@ if __name__ == '__main__':
         [0.5, 0.1, 0.8],  # 阴天时的活动概率
         [0.5, 3.2, 0.3],  # 阴天时的活动概率
     ]]]))
-    emission_probs = emission_probs.reshape(1, 1, 16, 3)
-    parallel_factor = 1
+    emission_probs = emission_probs.reshape(1, 4, 4, 3)
+    parallel_factor = 2
 
-    best_path = viterbi_parallel(emission_probs, parallel_factor, A, At, init_dist)
-    print(best_path)
+    viterbi_paths, gamma = viterbi_parallel(emission_probs, parallel_factor, A, At, init_dist)
+    print(viterbi_paths)
+    print(gamma.shape)
