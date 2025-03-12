@@ -65,6 +65,13 @@
           </mappings>
         </serverdata>
       </paths>
+      <paths name="wc_ddp">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="wc_deepgo2">
         <serverdata>
           <mappings>
@@ -136,6 +143,27 @@
         </serverdata>
       </paths>
       <paths name="wuchao_64 (5)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="wuchao_64 (6)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="wuchao_64 (7)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="wuchao_64 (8)">
         <serverdata>
           <mappings>
             <mapping local="$PROJECT_DIR$" web="/" />

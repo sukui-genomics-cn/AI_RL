@@ -263,7 +263,6 @@ def viterbi_parallel(emission_probs, parallel_factor, A, At, init_dist):
     num_model, b, num_chunks, q, chunk_length, _ = gamma.shape
     variables_out = tf.transpose(gamma, [0, 1, 2, 4, 3, 5])
 
-    print(gamma)
     variables_out = tf.reshape(variables_out, (num_model, b, num_chunks * chunk_length, q, q))
     return viterbi_paths, variables_out
 

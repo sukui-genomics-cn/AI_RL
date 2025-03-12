@@ -313,7 +313,6 @@ def viterbi_parallel(emission_probs, parallel_factor, A, At, init_dist):
 
         gamma = gamma.view(num_model, b, parallel_factor, z, chunk_size, q)
         viterbi_paths = viterbi_full_chunk_backtracking(viterbi_chunk_borders, gamma, At)
-        print(gamma)
         num_model, b, num_chunks, q, chunk_length, _ = gamma.shape
         variables_out = gamma.transpose(-2, -3)
         variables_out = variables_out.reshape(num_model, b, num_chunks * chunk_length, q, q)
@@ -365,7 +364,7 @@ if __name__ == '__main__':
         [0.5, 3.2, 0.3],  # 阴天时的活动概率
     ]]]))
     emission_probs = emission_probs.reshape(1, 4, 4, 3)
-    parallel_factor = 2
+    parallel_factor = 1
 
     viterbi_paths, gamma = viterbi_parallel(emission_probs, parallel_factor, A, At, init_dist)
     print(viterbi_paths)
