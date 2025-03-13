@@ -6,7 +6,7 @@ from torchvision.datasets import MNIST
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s|%(module)s[line-%(lineno)s]|%(levelname)s| %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -97,6 +97,7 @@ class RNNnet(nn.Module):
 
 
 def train(model, train_loader, eval_loader, criterion, optimizer, num_epochs):
+    model.train()
     for epoch in range(num_epochs):
         for step, (input_x, labels) in enumerate(train_loader):
             input_x = input_x.view(-1, 28, 28)
@@ -114,14 +115,15 @@ def train(model, train_loader, eval_loader, criterion, optimizer, num_epochs):
 def evaluate(model, eval_loader):
     predict_all = []
     labels_all = []
-    for i, (eval_x, eval_y) in enumerate(eval_loader):
-        eval_x = eval_x.view(-1, 28, 28)
-        eval_logits = model(eval_x)
-        pred_y = torch.max(eval_logits, 1)[1]
-        predict_all.extend(pred_y)
-        labels_all.extend(eval_y)
-    predict_all = torch.stack(predict_all, dim=0)
-    labels_all = torch.stack(labels_all, dim=0)
+    with torch.no_grad():
+        for i, (eval_x, eval_y) in enumerate(eval_loader):
+            eval_x = eval_x.view(-1, 28, 28)
+            eval_logits = model(eval_x)
+            pred_y = torch.max(eval_logits, 1)[1]
+            predict_all.extend(pred_y)
+            labels_all.extend(eval_y)
+        predict_all = torch.stack(predict_all, dim=0)
+        labels_all = torch.stack(labels_all, dim=0)
     return predict_all, labels_all
 
 
