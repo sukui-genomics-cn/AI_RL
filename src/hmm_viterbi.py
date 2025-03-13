@@ -40,20 +40,22 @@ def viterbi(obs, states, start_p, trans_p, emit_p):
 
 
 if __name__ == '__main__':
-    states = ('Healthy', 'Fever')
+    states = ('Healthy', 'Fever', "other")
 
     observations = ('normal', 'cold', 'dizzy')
 
-    start_probability = {'Healthy': 0.6, 'Fever': 0.4}
+    start_probability = {'Healthy': 0.6, 'Fever': 0.3, 'other': 0.1}
 
     transition_probability = {
-        'Healthy': {'Healthy': 0.7, 'Fever': 0.3},
-        'Fever': {'Healthy': 0.4, 'Fever': 0.6},
+        'Healthy': {'Healthy': 0.7, 'Fever': 0.2, 'other': 0.1},
+        'Fever': {'Healthy': 0.4, 'Fever': 0.5, 'other': 0.1},
+        'other': {'Healthy': 0.4, 'Fever': 0.5, 'other': 0.1},
     }
 
     emission_probability = {
         'Healthy': {'normal': 0.5, 'cold': 0.4, 'dizzy': 0.1},
         'Fever': {'normal': 0.1, 'cold': 0.3, 'dizzy': 0.6},
+        'other': {'normal': 0.1, 'cold': 0.3, 'dizzy': 0.6},
     }
 
 

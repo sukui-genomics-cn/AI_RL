@@ -40,6 +40,8 @@ class ColumnParallelLinear(torch.autograd.Function):
                 tensor_list = [torch.zeros_like(output_parallel) for _ in range(world_size)]
                 tensor_list[rank] = output_parallel
                 Y = torch.cat(tensor_list, dim=last_dim).contiguous()
+            else:
+                Y = output_parallel
         else:
             # Matrix multiply
             output_parallel = F.linear(X, W, B)
