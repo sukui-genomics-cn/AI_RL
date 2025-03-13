@@ -92,6 +92,11 @@ To Edit url of HF mirror
 vim /home/sukui/miniconda3/envs/llm_py12/lib/python3.12/site-packages/huggingface_hub/constants.py
 
 将huggingface.co全部替换成hf-mirror.com
+
+
+sed -i 's/huggingface.co/hf-mirror.com/g' /home/sukui/miniconda3/envs/llm_py12/lib/python3.12/site-packages/huggingface_hub/constants.py
+
+cat /home/sukui/miniconda3/envs/llm_py12/lib/python3.12/site-packages/huggingface_hub/constants.py | grep "hf-mirror.com"
 ```
 
 
