@@ -22,6 +22,8 @@ wsl --update
 wsl --set-default--version 2
 wsl -l -v 
 
+wsl  # run wsl
+
 # export and load mirror
 wsl --export Ubuntu-22.04 d:\wsl\ubuntu.tar
 
