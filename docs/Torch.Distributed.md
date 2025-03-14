@@ -237,3 +237,8 @@ def train(self, max_epochs: int):
       self._run_epoch(epoch)
 ```
 
+
+
+## Refs
+
+[Distributed for torch](https://pytorch.org/tutorials/beginner/ddp_series_multigpu.html)
